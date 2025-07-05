@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>نظام حضور وانصراف مع حساب التأخير</title>
+<style>
+body { font-family: Arial, sans-serif; direction: rtl; padding: 20px; background: #f0f0f0; }
+#login, #mainApp, #adminPanel { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; }
+h2 { text-align: center; margin-bottom: 20px; }
+button.big-btn {
+font-size: 30px; width: 45%; padding: 20px; margin: 10px 2.5%; cursor: pointer;
+border-radius: 10px; border: none; color: white;
+}
+#btnAttendance { background: #28a745; }
+#btnDeparture { background: #dc3545; }
+input, select {
+width: 100%; padding: 10px; margin: 8px 0; box-sizing: border-box; font-size: 18px;
+}
+table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+th { background-color: #eee; }
+.editBtn { cursor: pointer; color: blue; text-decoration: underline; }
+.logout { margin-top: 15px; cursor: pointer; color: red; background: none; border: none; font-weight: bold; }
+#exportCSVBtn {
+margin-top: 10px; padding: 10px; font-size: 16px; cursor: pointer;
+background-color: #007bff; color: white; border: none; border-radius: 5px;
+}
+#saveHint {
+margin-top: 10px; font-size: 14px; color: green; text-align: center;
+}
+label.inline-label {
+display: inline-block; width: 45%; font-weight: bold; margin-top: 10px;
+}
+input.time-input {
+width: 45%; padding: 8px; font-size: 16px; margin: 5px 2.5% 15px 2.5%;
+}
+</style>
+</head>
+<body>
+
+<div id="login">
+<h2>تسجيل اسم المستخدم</h2>
+<input type="text" id="usernameInput" placeholder="أدخل اسمك" />
+<button onclick="loginUser()">دخول</button>
+<hr />
+<button onclick="showAdminLogin()">تسجيل دخول الأدمن</button>
+</div>
+
+<div id="adminLogin" style="display:none;">
+<h2>تسجيل دخول الأدمن</h2>
+<input type="text" id="adminUser" placeholder="اسم المستخدم" />
+<input type="password" id="adminPass" placeholder="كلمة المرور" />
+<button onclick="adminLogin()">دخول الأدمن</button>
+<button onclick="hideAdminLogin()" style="margin-top:10px;">عودة</button>
+</div>
+
+<div id="mainApp" style="display:none;">
+<h2>مرحباً <span id="displayUsername"></span></h2>
+<button id="btnAttendance" class="big-btn" onclick="recordAttendance()">حضور</button>
+<button id="btnDeparture" class="big-btn" onclick="recordDeparture()">انصراف</button>
+<br />
+<button onclick="logout()">تسجيل خروج</button>
+<div id="saveHint">بياناتك محفوظة تلقائياً في متصفحك.</div>
+</div>
+
+<div id="adminPanel" style="display:none;">
+<h2>لوحة تحكم الأدمن</h2>
+<label>حدد ساعات الدوام:</label><br />
+<label class="inline-label" for="workStart">من:</label>
+<input id="workStart" class="time-input" type="time" value="08:00" onchange="saveWorkHours()" />
+<label class="inline-label" for="workEnd">إلى:</label>
+<input id="workEnd" class="time-input" type="time" value="16:00" onchange="saveWorkHours()" />
+<hr />
+<label>اختر الشهر والسنة:</label>
+<input type="month" id="filterMonth" value="" onchange="renderReport()" />
+<table id="recordsTable">
+<thead>
+<tr>
+<th>الاسم</th>
+<th>التاريخ</th>
+<th>نوع التسجيل</th>
+<th>الوقت</th>
+<th>التأخير (دقائق)</th>
+<th>تعديل</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+<button id="exportCSVBtn" onclick="exportToCSV()">تصدير البيانات كـ CSV</button>
+<h3>تقرير الحضور والغياب</h3>
+<table id="summaryTable">
+<thead>
+<tr>
+<th>الاسم</th>
+<th>أيام الحضور</th>
+<th>أيام الغياب</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+<button onclick="printReport()" style="margin-top:10px; padding:10px; font-size:16px;">طباعة التقرير</button>
+<button onclick="adminLogout()" class="logout">تسجيل خروج الأدمن</button>
+</div>
+
+<script>
+const ADMIN_USERNAME = "admin";
+const ADMIN_PASSWORD = "123456";
+
+let currentUser = null;
+let isAdmin = false;
+
+window.onload = function() {
+let savedUser = localStorage.getItem("currentUser");
+if (savedUser) {
+currentUser = savedUser;
+if(currentUser === ADMIN_USERNAME){
+isAdmin = true;
+showAdminPanel();
+} else {
+showMainApp();
+}
+}
+loadWorkHours();
+};
+
+// تحويل الوقت إلى 12 ساعة مع ص/م
+function formatTime12Hour(date) {
+let hours = date.getHours();
+let minutes = date.getMinutes();
+let seconds = date.getSeconds();
+let ampm = hours >= 12 ? "م" : "ص";
+hours = hours % 12;
+hours = hours ? hours : 12; // 0 تصبح 12
+return (
+String(hours).padStart(2, "0") +
+":" +
+String(minutes).padStart(2, "0") +
+":" +
+String(seconds).padStart(2, "0") +
+" " +
+ampm
+);
+}
+
+// حفظ ساعات الدوام في localStorage
+function saveWorkHours() {
+const start = document.getElementById("workStart").value;
+const end = document.getElementById("workEnd").value;
+localStorage.setItem("workHours", JSON.stringify({start, end}));
+renderReport(); // إعادة عرض التقرير لتحديث التأخير
+}
+
+// تحميل ساعات الدوام من localStorage
+function loadWorkHours() {
+const workHours = JSON.parse(localStorage.getItem("workHours"));
+if(workHours){
+document.getElementById("workStart").value = workHours.start;
+document.getElementById("workEnd").value = workHours.end;
+}
+}
+
+// حساب دقائق التأخير (إذا كان الوقت بعد وقت بداية الدوام)
+function calculateDelay(timeStr, workStartStr) {
+function to24Hour(t) {
+const [hms, ampm] = t.split(" ");
+let [h, m, s] = hms.split(":").map(Number);
+if(ampm === "م" && h !== 12) h += 12;
+if(ampm === "ص" && h === 12) h = 0;
+return {h,m,s};
+}
+const t1 = to24Hour(timeStr);
+const [wh, wm] = workStartStr.split(":").map(Number);
+const workStartMinutes = wh*60 + wm;
+const timeMinutes = t1.h*60 + t1.m;
+
+return timeMinutes > workStartMinutes ? timeMinutes - workStartMinutes : 0;
+}
+
+function loginUser() {
+const input = document.getElementById("usernameInput");
+const name = input.value.trim();
+if (!name) {
+alert("يرجى إدخال الاسم");
+return;
+}
+if (name.toLowerCase() === ADMIN_USERNAME) {
+alert("يرجى استخدام تسجيل دخول الأدمن");
+return;
+}
+currentUser = name;
+localStorage.setItem("currentUser", currentUser);
+showMainApp();
+}
+
+function showMainApp() {
+document.getElementById("login").style.display = "none";
+document.getElementById("adminLogin").style.display = "none";
+document.getElementById("adminPanel").style.display = "none";
+document.getElementById("mainApp").style.display = "block";
+document.getElementById("displayUsername").textContent = currentUser;
+}
+
+function logout() {
+localStorage.removeItem("currentUser");
+currentUser = null;
+isAdmin = false;
+document.getElementById("mainApp").style.display = "none";
+document.getElementById("login").style.display = "block";
+}
+
+function recordAttendance() {
+recordEntry("حضور");
+}
+
+function recordDeparture() {
+recordEntry("انصراف");
+}
+
+function recordEntry(type) {
+if (!currentUser) {
+alert("الرجاء تسجيل الدخول أولاً");
+return;
+}
+const now = new Date();
+let delayMinutes = 0;
+if(type === "حضور"){
+const workHours = JSON.parse(localStorage.getItem("workHours"));
+if(workHours && workHours.start){
+const currentTimeStr = formatTime12Hour(now);
+delayMinutes = calculateDelay(currentTimeStr, workHours.start);
+}
+}
+const record = {
+user: currentUser,
+type: type,
+date: now.toISOString().slice(0,10),
+time: formatTime12Hour(now),
+delay: delayMinutes
+};
+let records = JSON.parse(localStorage.getItem("attendanceRecords") || "[]");
+records.push(record);
+localStorage.setItem("attendanceRecords", JSON.stringify(records));
+alert(type + " تم تسجيله في " + record.date + " الساعة " + record.time + (delayMinutes > 0 ? "، تأخير: "+delayMinutes+" دقيقة" : ""));
+}
+
+function showAdminLogin() {
+document.getElementById("login").style.display = "none";
+document.getElementById("adminLogin").style.display = "block";
+}
+
+function hideAdminLogin() {
+document.getElementById("adminLogin").style.display = "none";
+document.getElementById("login").style.display = "block";
+}
+
+function adminLogin() {
+const user = document.getElementById("adminUser").value.trim();
+const pass = document.getElementById("adminPass").value.trim();
+if(user === ADMIN_USERNAME && pass === ADMIN_PASSWORD){
+isAdmin = true;
+currentUser = ADMIN_USERNAME;
+localStorage.setItem("currentUser", currentUser);
+document.getElementById("adminLogin").style.display = "none";
+document.getElementById("login").style.display = "none";
+showAdminPanel();
+} else {
+alert("بيانات الأدمن غير صحيحة");
+}
+}
+
+function showAdminPanel() {
+document.getElementById("adminPanel").style.display = "block";
+document.getElementById("mainApp").style.display = "none";
+renderReport();
+const today = new Date();
+document.getElementById("filterMonth").value = today.toISOString().slice(0,7);
+}
+
+function adminLogout() {
+localStorage.removeItem("currentUser");
+currentUser = null;
+isAdmin = false;
+document.getElementById("adminPanel").style.display = "none";
+document.getElementById("login").style.display = "block";
+}
+
+function renderReport() {
+const filter = document.getElementById("filterMonth").value;
+let records = JSON.parse(localStorage.getItem("attendanceRecords") || "[]");
+let tbody = document.querySelector("#recordsTable tbody");
+tbody.innerHTML = "";
+
+if(filter){
+records = records.filter(r => r.date.startsWith(filter));
+}
+
+records.forEach((rec, i) => {
+const tr = document.createElement("tr");
+tr.innerHTML = `
+<td>${rec.user}</td>
+<td>${rec.date}</td>
+<td>${rec.type}</td>
+<td>${rec.time}</td>
+<td>${rec.delay || 0}</td>
+<td><span class="editBtn" onclick="editRecord(${i})">تعديل</span></td>
+`;
+tbody.appendChild(tr);
+});
+
+renderSummary(records, filter);
+}
+
+function editRecord(index) {
+let records = JSON.parse(localStorage.getItem("attendanceRecords") || "[]");
+const rec = records[index];
+if(!rec) return alert("السجل غير موجود");
+
+const action = prompt("هل تريد تعديل السجل أو حذفه؟ اكتب 'حذف' للحذف أو 'تعديل' للتعديل:", "تعديل");
+if(!action) return;
+
+if(action === "حذف") {
+if(confirm("هل أنت متأكد أنك تريد حذف هذا السجل؟")) {
+records.splice(index, 1);
+localStorage.setItem("attendanceRecords", JSON.stringify(records));
+alert("تم حذف السجل");
+renderReport();
+}
+return;
+}
+
+if(action === "تعديل") {
+const newDate = prompt("تعديل التاريخ (YYYY-MM-DD):", rec.date);
+if(!newDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDate)){
+return alert("تاريخ غير صالح");
+}
+const newType = prompt("تعديل النوع (حضور أو انصراف):", rec.type);
+if(newType !== "حضور" && newType !== "انصراف"){
+return alert("النوع يجب أن يكون 'حضور' أو 'انصراف'");
+}
+const newTime = prompt("تعديل الوقت (HH:MM:SS ص/م):", rec.time);
+if(!newTime || !/^\d{2}:\d{2}:\d{2} (ص|م)$/.test(newTime)){
+return alert("وقت غير صالح");
+}
+let newDelay = 0;
+if(newType === "حضور"){
+const workHours = JSON.parse(localStorage.getItem("workHours"));
+if(workHours && workHours.start){
+newDelay = calculateDelay(newTime, workHours.start);
+}
+}
+records[index] = {
+user: rec.user,
+date: newDate,
+type: newType,
+time: newTime,
+delay: newDelay
+};
+localStorage.setItem("attendanceRecords", JSON.stringify(records));
+alert("تم تعديل السجل");
+renderReport();
+}
+}
+
+function renderSummary(records, filterMonth) {
+let tbody = document.querySelector("#summaryTable tbody");
+tbody.innerHTML = "";
+
+const users = [...new Set(records.map(r => r.user).filter(u => u !== ADMIN_USERNAME))];
+
+if(!filterMonth) return;
+const [year, month] = filterMonth.split("-").map(Number);
+const daysInMonth = new Date(year, month, 0).getDate();
+
+users.forEach(user => {
+const daysWithAttendance = new Set();
+records.forEach(r => {
+if(r.user === user && r.type === "حضور" && r.date.startsWith(filterMonth)){
+daysWithAttendance.add(r.date);
+}
+});
+
+const attendanceDaysCount = daysWithAttendance.size;
+const absenceDaysCount = daysInMonth - attendanceDaysCount;
+
+const tr = document.createElement("tr");
+tr.innerHTML = `
+<td>${user}</td>
+<td>${attendanceDaysCount}</td>
+<td>${absenceDaysCount}</td>
+`;
+tbody.appendChild(tr);
+});
+}
+
+function exportToCSV() {
+let records = JSON.parse(localStorage.getItem("attendanceRecords") || "[]");
+if(records.length === 0){
+alert("لا توجد بيانات للتصدير");
+return;
+}
+
+const header = ["الاسم", "التاريخ", "نوع التسجيل", "الوقت", "التأخير (دقائق)"];
+const rows = records.map(r => [r.user, r.date, r.type, r.time, r.delay || 0]);
+
+let csvContent = "";
+csvContent += header.join(",") + "\n";
+rows.forEach(row => {
+csvContent += row.join(",") + "\n";
+});
+
+const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+const url = URL.createObjectURL(blob);
+const link = document.createElement("a");
+link.setAttribute("href", url);
+link.setAttribute("download", "attendance_records.csv");
+link.style.visibility = 'hidden';
+document.body.appendChild(link);
+link.click();
+document.body.removeChild(link);
+}
+
+function printReport() {
+const originalContents = document.body.innerHTML;
+const adminPanelContents = document.getElementById("adminPanel").innerHTML;
+
+document.body.innerHTML = adminPanelContents;
+window.print();
+document.body.innerHTML = originalContents;
+
+location.reload();
+}
+</script>
+
+</body>
+</html>
